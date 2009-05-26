@@ -377,7 +377,7 @@ class pk2_la:
 		### Write out the data
 		for i in range(1,4):
 			df.write("Channel: " + `i` + "\n")
-			for bit in self.channel_data[i]:
+			for bit in self.channel_data[i - 1]:
 				df.write(bit)
 			df.write("\n\n")
 
@@ -662,6 +662,7 @@ class pk2_la_display:
 
 		### Now, the scrollable window for the channel display
 		dispwin = gtk.ScrolledWindow()
+		self.dispwin = dispwin
 		dispwin.set_policy(gtk.POLICY_AUTOMATIC, gtk.POLICY_NEVER)
 		chbox = gtk.VBox(False, 0)
 		dispwin.add_with_viewport(chbox)
@@ -693,11 +694,11 @@ class pk2_la_display:
 		dispbox.pack_start(ctrlbox, False, False, 0)
 
 		### Add the save buttons
-		gfx_save_button = gtk.Button("Save Wave")
-		#gfx_save_button.connect("clicked", self.gfx_save)
+		gfx_save_button = gtk.Button("Save Visible")
+		gfx_save_button.connect("clicked", self.gfx_save)
 		ctrlbox.pack_start(gfx_save_button, True, True, 0)
 		data_save_button = gtk.Button("Save Data")
-		#data_save_button.connect("clicked", self.data_save)
+		data_save_button.connect("clicked", self.data_save)
 		ctrlbox.pack_start(data_save_button, True, True, 0)
 
 		### Add the zoom label
@@ -714,6 +715,24 @@ class pk2_la_display:
 		self.zoom.set_active(2)
 		self.zoom.connect('changed', self.update_zoom)
 		ctrlbox.pack_start(self.zoom, True, False, 0)
+
+	### Open a save dialog for the gfx version
+	def gfx_save(self, widget):
+		### Allocate the pixbuf for the image
+		x,y,width,height = self.dispwin.get_allocation()
+		pixbuf = gtk.gdk.Pixbuf(gtk.gdk.COLORSPACE_RGB, 0, 8, width - x, 150)
+		chooser = gtk.FileChooserDialog(title="Save image of acquired data as...",action=gtk.FILE_CHOOSER_ACTION_SAVE, buttons=(gtk.STOCK_CANCEL,gtk.RESPONSE_CANCEL,gtk.STOCK_OPEN,gtk.RESPONSE_OK))
+		pixbuf.get_from_drawable(self.dispwin.get_window(), self.dispwin.get_colormap(), x, y, 0, 0, width - x, 150)
+		chooser.run()
+		pixbuf.save(chooser.get_filename(), "png")
+		chooser.destroy()
+
+	### Open a save dialog for the txt version
+	def data_save(self, widget):
+		chooser = gtk.FileChooserDialog(title="Save acquired data as...",action=gtk.FILE_CHOOSER_ACTION_SAVE, buttons=(gtk.STOCK_CANCEL,gtk.RESPONSE_CANCEL,gtk.STOCK_OPEN,gtk.RESPONSE_OK))
+		chooser.run()
+		self.pk2.write_data(chooser.get_filename())
+		chooser.destroy()
 
 	### Place or clear a cursor when a mouse button is clicked on the drawing area
 	def clicked(self, widget, event):
