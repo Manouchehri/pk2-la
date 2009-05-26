@@ -39,25 +39,6 @@ PK2_CURSOR1		= 1
 PK2_CURSOR2		= 2
 PK2_CURSOR_BOTH		= 3
 
-### Simplify message boxes
-class msg_box (gtk.Dialog):
-	def __init__(self, title, parent, text, type):
-		btn = None
-		if type == "OK":
-			btn = (gtk.STOCK_OK, gtk.RESPONSE_OK)
-		elif type == "CANCEL":
-			btn = (gtk.STOCK_CANCEL, gtk.RESPONSE_CANCEL)
-		else:
-			print "Invalid type: ", type
-			sys.exit(-1)
-
-		gtk.Dialog.__init__(self, title, parent, gtk.DIALOG_MODAL | gtk.DIALOG_DESTROY_WITH_PARENT, btn)	
-		self.vbox.pack_start(gtk.Label(text))
-		self.show_all()
-		result = self.run()
-		self.destroy()
-		return None
-
 class pk2_la:
 	### Initializes the pickit2 device
 	def __init__(self, unit):
@@ -132,6 +113,9 @@ class pk2_la:
 
 			### Convert the input to channel data
 			self.channel_data = self.raw_to_data(pk2_data)
+			return True
+		else:
+			return False
 
 	### Run the I/O Module
 	def run_io(self):
@@ -1237,7 +1221,10 @@ class pk2_la_gui:
 	
 		### Check to be sure that we have a valid state
 		if not pk2.setup_valid():
-			msg_box("Invalid configuration", self.window, "You must set at least one trigger", "OK")
+			err = gtk.MessageDialog(None, gtk.DIALOG_MODAL, gtk.MESSAGE_ERROR, gtk.BUTTONS_OK, "You must set at least one trigger")
+			err.set_title("Invalid Configuration")
+			err.run()
+			err.destroy()
 			return
 	
 		### Update the gui
@@ -1246,7 +1233,12 @@ class pk2_la_gui:
 		### Update the window (done here because the pk2.acquire might take a long time)
 		gtk.main_iteration(False)
 		### Run the analyzer
-		self.pk2.acquire_la()
+		if not self.pk2.acquire_la():
+			err = gtk.MessageDialog(None, gtk.DIALOG_MODAL, gtk.MESSAGE_ERROR, gtk.BUTTONS_OK, "The acquisition was canceled")
+			err.set_title("Canceled")
+			err.run()
+			err.destroy()
+			
 		### Update the window
 		self.window.queue_draw()
 		### We're done - either canceled or got data, set the button back
