@@ -711,7 +711,7 @@ class pk2_la_display:
 		self.zoom.append_text("1.0x")
 		self.zoom.append_text("2.0x")
 		self.zoom.append_text("5.0x")
-		self.zoom.set_active(1)
+		self.zoom.set_active(2)
 		self.zoom.connect('changed', self.update_zoom)
 		ctrlbox.pack_start(self.zoom, True, False, 0)
 
