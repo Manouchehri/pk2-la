@@ -1,0 +1,10 @@
+I/O Probe
+=====================================================================
+1. Read VDD/VPP -> Make sure we have a voltage on the device
+2. Set VDD
+3. Set VPP
+4. Script 1
+5. Script 2
+6. Loop
+	a. Run Script
+	b. Read Status
