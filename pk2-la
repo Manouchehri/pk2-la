@@ -3,13 +3,19 @@
 ### For the logic analyzer
 import usb
 import sys
+from threading import Thread
 
 ### For the GUI
+import time
 import pygtk
 import pango
 pygtk.require('2.0')
 import gtk
-from threading import Thread
+import gobject
+
+### This makes threads work
+gtk.gdk.threads_init()
+gobject.threads_init()
 
 ###############################################################################
 ### Logic Analyzer
@@ -66,7 +72,8 @@ PK2_CURSOR_BOTH		= 3
 
 class pk2_la:
 	### Initializes the pickit2 device
-	def __init__(self, unit):
+	def __init__(self, unit, gui_ref):
+		self.gui_ref = gui_ref
 		### Find the device
 		device = self.find_device(unit)
 		### Connect to the device
@@ -110,7 +117,7 @@ class pk2_la:
 		self.chan_val = [ 0, 0, 0, 0 ]
 		self.io_running = False
 		self.io_thread = None
-		self.last_chan_val = self.chan_val
+		self.last_chan_val = [ -1, -1, -1, -1]
 		self.last_chan_io = self.chan_io
 
 	###############################################################
@@ -312,8 +319,8 @@ class pk2_la:
 			pass
 
 		### Save the local copy of the pin value and io state
-		self.last_chan_val = self.chan_val
-		self.last_chan_io = self.chan_io
+		self.last_chan_val = self.chan_val[:]
+		self.last_chan_io = self.chan_io[:]
 
 		### Check device status
 		### FIXME What are we checking here?
@@ -356,7 +363,7 @@ class pk2_la:
 		return ret
 		
 	### Run the I/O Module
-	def run_io(self, btns):
+	def run_io(self):
 		### Check to make sure we have a voltage on the device
 		vdd, vpp = self.check_voltages()
 		### I'm not sure this is the correct check, but it should work
@@ -373,12 +380,15 @@ class pk2_la:
 		self.set_vpp(vdd, 0.7)
 		### Set VDD
 		self.set_vdd(vdd, 0.85)
+		
+		### Setup the IO Module
+		self.io_setup()
 				
 		### Start the io thread running			
 		self.io_running = True
 
 		### Start the thread
-		self.io_thread = io_thread(self, btns)
+		self.io_thread = io_thread(self)
 		self.io_thread.start()
 		return True
 	
@@ -661,40 +671,37 @@ class pk2_la:
 		except:	
 			pass
 
+###############################################################################
 ### Thread for running the I/O Module
+###############################################################################
 class io_thread(Thread):
-	def __init__(self, pk2, btns):
+	def __init__(self, pk2):
 		Thread.__init__(self)
 		self.pk2 = pk2
-		self.btns = btns
 
 	### Runs the loop that sets and releases the pins
-	def run_io(self):
+	def run(self):
 		while self.pk2.io_running:
-			### Update the window (done here because otherwise, it wouldn't get called)
-			self.btns.update_btns()
-			gtk.main_iteration(False)
 			### If we need to update the pins, do it now
-			if not self.pk2.last_chan_val == self.pk2.chan_val or not self.pk2.last_chan_io == self.pk2.chan_io:
+			if not (self.pk2.last_chan_val == self.pk2.chan_val) or not (self.pk2.last_chan_io == self.pk2.chan_io):
+				### Update the buttons as well
+				gtk.gdk.threads_enter()
+				self.pk2.gui_ref.ioFrame.update_btns()
+				gtk.gdk.threads_leave()
 				self.pk2.io_setup_pins()
 
 			### Request the next report
 			ret = self.pk2.io_request_pins()
 
+			#print ret[0], ret[1], ret[2], ret[3]
+			self.pk2.chan_val[3] = ret[2] & 0x01
+
 			### FIXME figure out the return value
-			print ret
+			#print ret
 
 			### Check device status
 			### FIXME What are we checking here?
 			self.pk2.check_status()
-
-	### The actual thread that gets run
-	def run(self):
-		print "Setup"
-		self.pk2.io_setup()
-		print "Run"
-		self.run_io()
-		print "Done"
 
 ###############################################################################
 ### GUI
@@ -1307,8 +1314,10 @@ class pk2_io_button(gtk.Button):
 		if on == None:
 			if self.pk2.chan_val[self.channel] == 0:
 				on = False
+				self.set_label("0")
 			else:
 				on = True
+				self.set_label("1")
 
 		### Update the decorations
 		if on:
@@ -1463,7 +1472,7 @@ class pk2_io_gui:
 	def run_io_btn(self, widget):
 		### Enable the I/O component
 		if widget.get_label() == "Enable I/O":
-			if self.pk2.run_io(self):
+			if self.pk2.run_io():
 				widget.set_label("Disable I/O")
 		else:
 			widget.set_label("Enable I/O")
@@ -1501,7 +1510,7 @@ class pk2_la_gui:
 	def __init__(self):
 		### Create the logic analyzer instance	
 		### FIXME Allow selecting different analyzers
-		self.pk2 = pk2_la(0)
+		self.pk2 = pk2_la(0, self)
 
 		window = gtk.Window(gtk.WINDOW_TOPLEVEL)
 		window.connect("delete_event", self.delete)
@@ -1598,8 +1607,6 @@ class pk2_la_gui:
 		widget.set_sensitive(True)
 
 	def main(self):
-		### This makes threads work
-		gtk.gdk.threads_init()
 		### Start the gtk app
 		gtk.main()
 
