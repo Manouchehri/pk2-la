@@ -675,11 +675,11 @@ class io_thread(Thread):
 			self.btns.update_btns()
 			gtk.main_iteration(False)
 			### If we need to update the pins, do it now
-			if not self.last_chan_val == self.pk2.chan_val or not self.last_chan_io == self.pk2.chan_io:
-				self.setup_pins()
+			if not self.pk2.last_chan_val == self.pk2.chan_val or not self.pk2.last_chan_io == self.pk2.chan_io:
+				self.pk2.io_setup_pins()
 
 			### Request the next report
-			ret = self.pk2.request_pins()
+			ret = self.pk2.io_request_pins()
 
 			### FIXME figure out the return value
 			print ret
@@ -1598,6 +1598,9 @@ class pk2_la_gui:
 		widget.set_sensitive(True)
 
 	def main(self):
+		### This makes threads work
+		gtk.gdk.threads_init()
+		### Start the gtk app
 		gtk.main()
 
 ### Run the main window
