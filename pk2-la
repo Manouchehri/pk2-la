@@ -9,6 +9,7 @@ import pygtk
 import pango
 pygtk.require('2.0')
 import gtk
+from threading import Thread
 
 ###############################################################################
 ### Logic Analyzer
@@ -22,10 +23,34 @@ PK2_INT_READ		= 0x81
 INT_PKT_SZ		= 0x40
 
 ### Commands
-PK2_SETUP		= 0xB8
 PK2_SET_POS		= 0xB9
+PK2_SETUP		= 0xB8
 PK2_READ		= 0xAC
 PK2_PADDING		= 0xAD
+PK2_RUN_SCRIPT		= 0xA6
+PK2_CHECK_VOLTAGE	= 0xA3
+PK2_CHECK_STATUS	= 0xA2
+PK2_SET_VPP		= 0xA1 # Logic Input Level
+PK2_SET_VDD		= 0xA0 # Supply Level
+
+### Scripting Commands (from pk2cmd source, only the used ones are here)
+PK2_SCR_VPP_OFF		= 0xFA
+PK2_SCR_VPP_PWM_ON	= 0xF9
+PK2_SCR_MCLR_GND_ON	= 0xF7
+PK2_SCR_MCLR_GND_OFF	= 0xF6
+PK2_SCR_SET_ICSP_PINS	= 0xF3
+PK2_SCR_DELAY_LONG	= 0xE8
+PK2_SCR_ICSP_STATE_BUF 	= 0xDC
+PK2_SCR_SET_AUX		= 0xCF
+PK2_SCR_AUX_BUF		= 0xCE
+
+### Pin Constants for I/O
+PK2_IO_ICSP_1_IN	= 0x01
+PK2_IO_ICSP_2_IN	= 0x02
+PK2_IO_ICSP_1_SET	= 0x04
+PK2_IO_ICSP_2_SET	= 0x08
+PK2_IO_AUX_1_IN		= 0x01
+PK2_IO_AUX_1_SET	= 0x02
 
 ### Banks
 PK2_BANK_0		= 0x06
@@ -83,7 +108,14 @@ class pk2_la:
 		### I/O State
 		self.chan_io = [ "Output", "Input", "Input", "Input" ]
 		self.chan_val = [ 0, 0, 0, 0 ]
+		self.io_running = False
+		self.io_thread = None
+		self.last_chan_val = self.chan_val
+		self.last_chan_io = self.chan_io
 
+	###############################################################
+	### Functions for both components 
+	###############################################################
 	### Unit is the device matched that we want to use
 	def find_device(self, unit):
 		devices = []
@@ -100,11 +132,265 @@ class pk2_la:
 		else:
 			return devices[unit]
 
+	### Get the VDD and VPP levels
+	def check_voltages(self):
+		done = False
+		try:
+			### Send the command
+			msg = chr(PK2_CHECK_VOLTAGE) + chr(PK2_PADDING) * 63
+			self.devhandle.interruptWrite(PK2_INT_WRITE, msg)
+		except:
+			pass
+	
+		while not done:
+			try:
+				ret = self.devhandle.interruptRead(PK2_INT_READ, INT_PKT_SZ)
+			### We ignore failures here because we're just polling for
+			### the return from the device
+			except:
+				pass
+			else:
+				done = True
+
+		### This equation is from the pk2cmd program from microchip
+		vdd = (float(ret[1] << 8 | ret[0]) / 0x10000) * 5.0
+		vpp = (float(ret[3] << 8 | ret[2]) / 0x10000) * 13.7
+		return vdd, vpp
+
+	### Set the vpp voltage level
+	### This function is based on one from pk2cmd
+	def set_vpp(self, voltage, threshold):
+		### Message Header
+		msg = chr(PK2_SET_VPP) + chr(0x40)
+		### Find ADC threshold
+		adc = int(float(voltage) * 18.61)
+		### Find Fault threshold
+		fault = int(float(voltage * threshold) * 18.61)
+
+		### Send the msg to the device
+		try:
+			msg = msg + chr(adc) + chr(fault) + chr(PK2_PADDING) * 60
+			self.devhandle.interruptWrite(PK2_INT_WRITE, msg)
+		except:
+			pass
+	
+	### Set the vdd voltage level
+	### This function is based on one from pk2cmd
+	def set_vdd(self, voltage, threshold):
+		### Voltage must be >= 2.5, setting too low prevents vpp pump from working
+		if voltage < 2.5:
+			voltage = 2.5
+		### Find the capture and compare value
+		ccp = int(float(voltage * 32) + 10.5) << 6
+		### Find the fault value
+		fault = int((float(threshold * voltage) / 5) * 255)
+		### ~4.12v maximum due to diode droop
+		if fault > 210:
+			fault = 210
+
+		### Message Header
+		msg = chr(PK2_SET_VDD)
+		### Send the msg to the device
+		try:
+			msg = msg + chr(ccp & 0xFF) + chr((ccp >> 8) & 0xFF) + chr(fault & 0xFF) + chr(PK2_PADDING) * 60
+			self.devhandle.interruptWrite(PK2_INT_WRITE, msg)
+		except:
+			pass
+	
+	### Checks the status of the device, a list of the possible responses
+	### can be found in the IO Probe text file
+	def check_status(self):
+		### Check the device status
+		msg = chr(PK2_CHECK_STATUS) + chr(PK2_PADDING) * 63
+		try:
+			### Send status msg
+			self.devhandle.interruptWrite(PK2_INT_WRITE, msg)
+		except:
+			pass
+
+		### Get status back
+		done = False
+		while not done:
+			try:
+				ret = self.devhandle.interruptRead(PK2_INT_READ, INT_PKT_SZ)
+			### We ignore failures here because we're just polling for
+			### the return from the device
+			except:
+				pass
+			else:
+				done = True
+
+		return (ret[1] << 8) | ret[0]
+		
+	#######################################################################
+	### I/O Probe Components
+	#######################################################################
+	### Generate the byte used to set the ICSP Pins
+	def gen_icsp_byte(self):
+		icsp_pins = 0
+
+		### Channel 1
+		if self.chan_io[1] == "Input":
+			icsp_pins = icsp_pins | PK2_IO_ICSP_1_IN
+		if self.chan_val[1] == 1:
+			icsp_pins = icsp_pins | PK2_IO_ICSP_1_SET
+		
+		### Channel 2
+		if self.chan_io[2] == "Input":
+			icsp_pins = icsp_pins | PK2_IO_ICSP_2_IN
+		if self.chan_val[2] == 1:
+			icsp_pins = icsp_pins | PK2_IO_ICSP_2_SET
+		return icsp_pins
+	
+	### Generate the byte used to set the AUX Pins
+	def gen_aux_byte(self):
+		aux_pins = 0
+
+		### Aux pin
+		if self.chan_io[3] == "Input":
+			aux_pins = aux_pins | PK2_IO_AUX_1_IN
+		if self.chan_val[3] == 1:
+			aux_pins = aux_pins | PK2_IO_AUX_1_SET
+		return aux_pins
+
+	### Setup the I/O Module
+	def io_setup(self):
+		msg = chr(PK2_RUN_SCRIPT)
+		### 9 Commands in this script
+		msg = msg + chr(0x09)
+		### Turn off VPP
+		msg = msg + chr(PK2_SCR_VPP_OFF)
+		### Set Ch. 0 to 0/1
+		if self.chan_val[0] == 0:
+			msg = msg + chr(PK2_SCR_MCLR_GND_ON)
+		else:
+			msg = msg + chr(PK2_SCR_MCLR_GND_OFF)
+		### Turn on VPP PWM
+		msg = msg + chr(PK2_SCR_VPP_PWM_ON)
+		### Set ICSP Pins
+		msg = msg + chr(PK2_SCR_SET_ICSP_PINS) + chr(self.gen_icsp_byte())
+		### Set AUX Pins
+		msg = msg + chr(PK2_SCR_SET_AUX) + chr(self.gen_aux_byte())
+		### Delay
+		msg = msg + chr(PK2_SCR_DELAY_LONG) + chr(0x14)
+		### Padding
+		msg = msg + chr(PK2_PADDING) * 53
+		
+		### Send the msg to the device
+		try:
+			self.devhandle.interruptWrite(PK2_INT_WRITE, msg)
+		except:
+			pass
+
+		### Check device status
+		### FIXME What are we checking here?
+		self.check_status()
+
+	### Sets the pins direction and value
+	def io_setup_pins(self):
+		msg = chr(PK2_RUN_SCRIPT)
+		### 6 Commands in this script
+		msg = msg + chr (0x06)
+		### Turn off VPP
+		msg = msg + chr(PK2_SCR_VPP_OFF)
+		### Set Ch. 0 to 0/1
+		if self.chan_val[0] == 0:
+			msg = msg + chr(PK2_SCR_MCLR_GND_ON)
+		else:
+			msg = msg + chr(PK2_SCR_MCLR_GND_OFF)
+		### Set ICSP Pins
+		msg = msg + chr(PK2_SCR_SET_ICSP_PINS) + chr(self.gen_icsp_byte())
+		### Set AUX Pins
+		msg = msg + chr(PK2_SCR_SET_AUX) + chr(self.gen_aux_byte())
+		### Padding
+		msg = msg + chr(PK2_PADDING) * 56
+
+		### Send the msg to the device
+		try:
+			self.devhandle.interruptWrite(PK2_INT_WRITE, msg)
+		except:
+			pass
+
+		### Save the local copy of the pin value and io state
+		self.last_chan_val = self.chan_val
+		self.last_chan_io = self.chan_io
+
+		### Check device status
+		### FIXME What are we checking here?
+		self.check_status()
+
+	### Requests an I/O report
+	def io_request_pins(self):
+		### Send the data request	
+		msg = chr(PK2_RUN_SCRIPT)
+		### 2 Instructions
+		msg = msg + chr(0x02)
+		### Request the state buffer? 
+		msg = msg + chr(PK2_SCR_ICSP_STATE_BUF)
+		### Request the aux state buffer?
+		msg = msg + chr(PK2_SCR_AUX_BUF)
+		### Unknown
+		msg = msg + chr(0xAA)
+		### Padding
+		msg = msg + chr(PK2_PADDING) * 59
+
+		### Send the msg to the device
+		try:
+			self.devhandle.interruptWrite(PK2_INT_WRITE, msg)
+		except:
+			pass
+
+		done = False
+		### Get response
+		while not done:
+			try:
+				ret = self.devhandle.interruptRead(PK2_INT_READ, INT_PKT_SZ)
+			### We ignore failures here because we're just polling for
+			### the return from the device
+			except:
+				pass
+			else:
+				done = True
+
+		### FIXME understand these
+		return ret
+		
+	### Run the I/O Module
+	def run_io(self, btns):
+		### Check to make sure we have a voltage on the device
+		vdd, vpp = self.check_voltages()
+		### I'm not sure this is the correct check, but it should work
+		if vdd < vpp:
+			err = gtk.MessageDialog(None, gtk.DIALOG_MODAL, gtk.MESSAGE_ERROR, gtk.BUTTONS_OK, "You must connect VDD (pin 2) to a source")
+			err.set_title("Check Source Voltage")
+			err.run()
+			err.destroy()
+			return False
+
+		### These values were determined by doing the reverse of the
+		### equations in these functions using the captured data
+		### Set VPP
+		self.set_vpp(vdd, 0.7)
+		### Set VDD
+		self.set_vdd(vdd, 0.85)
+				
+		### Start the io thread running			
+		self.io_running = True
+
+		### Start the thread
+		self.io_thread = io_thread(self, btns)
+		self.io_thread.start()
+		return True
+	
+	#######################################################################
+	### Logic Analyzer Components
+	#######################################################################
+	
 	### Wait for a trigger and retrieve data
-	def acquire_la(self):
+	def la_acquire(self):
 		### Get the data
 		pk2_data = []
-		if self.setup_trigger():
+		if self.la_setup_trigger():
 			### Read from the banks
 			pk2_data.append(self.read_bank(PK2_BANK_0, 0x00))
 			pk2_data.append(self.read_bank(PK2_BANK_0, 0x80))
@@ -112,29 +398,13 @@ class pk2_la:
 			pk2_data.append(self.read_bank(PK2_BANK_1, 0x80))
 
 			### Convert the input to channel data
-			self.channel_data = self.raw_to_data(pk2_data)
+			self.channel_data = self.la_raw_to_data(pk2_data)
 			return True
 		else:
 			return False
 
-	### Run the I/O Module
-	def run_io(self):
-		### Check to make sure we have a voltage on the device
-
-		### Set the VDD
-
-		### Set the VPP
-
-		### Send the 1st command
-
-		### Send the 2nd command
-
-		### Start the thread
-		pass
-
-
 	### Takes the raw data banks and converts to a tuple of bits for each channel
-	def raw_to_data(self, bank_data):
+	def la_raw_to_data(self, bank_data):
 		channel_data = [[], [], []]
 		### Loop over the banks
 		for i in range(0, 4):
@@ -174,14 +444,14 @@ class pk2_la:
 
 
 	### Write a setup pkt to the device
-	def setup_trigger(self):
+	def la_setup_trigger(self):
 		### Quick check, make sure things are sane
-		if not self.setup_valid():
+		if not self.la_setup_valid():
 			print "The setup is not valid - please set a trigger"
 			return False
 			
 		### Create the setup packet to send to the device
-		msg = self.setup_pkt()
+		msg = self.la_setup_pkt()
 		### FIXME better error checking
 		try:
 			### Send the setup packet
@@ -247,7 +517,7 @@ class pk2_la:
 		return bank_data
 
 	### Make sure that the settings are valid for an acquisition
-	def setup_valid(self):
+	def la_setup_valid(self):
 		### Make sure that at least one channel is enabled
 		if self.trig_en == 0:
 			return False
@@ -255,7 +525,7 @@ class pk2_la:
 
 	### Make a setup packet to send to the device
 	### Settings are taken from the values stored in this object
-	def setup_pkt(self):
+	def la_setup_pkt(self):
 		### Packet Header
 		msg = chr(PK2_SETUP) + chr(1)
 
@@ -366,11 +636,11 @@ class pk2_la:
 			self.trig_edge = self.trig_edge | trig_const
 	
 	### Returns the selected channel data
-	def get_data(self, chan):
+	def get_la_data(self, chan):
 		return self.channel_data[chan - 1]
-
+	
 	### Writes data to a file
-	def write_data(self, filename):
+	def write_la_data(self, filename):
 		### Open the file
 		df = open(filename, "w") 
 
@@ -390,6 +660,41 @@ class pk2_la:
 			del self.__devhandle
 		except:	
 			pass
+
+### Thread for running the I/O Module
+class io_thread(Thread):
+	def __init__(self, pk2, btns):
+		Thread.__init__(self)
+		self.pk2 = pk2
+		self.btns = btns
+
+	### Runs the loop that sets and releases the pins
+	def run_io(self):
+		while self.pk2.io_running:
+			### Update the window (done here because otherwise, it wouldn't get called)
+			self.btns.update_btns()
+			gtk.main_iteration(False)
+			### If we need to update the pins, do it now
+			if not self.last_chan_val == self.pk2.chan_val or not self.last_chan_io == self.pk2.chan_io:
+				self.setup_pins()
+
+			### Request the next report
+			ret = self.pk2.request_pins()
+
+			### FIXME figure out the return value
+			print ret
+
+			### Check device status
+			### FIXME What are we checking here?
+			self.pk2.check_status()
+
+	### The actual thread that gets run
+	def run(self):
+		print "Setup"
+		self.pk2.io_setup()
+		print "Run"
+		self.run_io()
+		print "Done"
 
 ###############################################################################
 ### GUI
@@ -731,7 +1036,7 @@ class pk2_la_display:
 	def data_save(self, widget):
 		chooser = gtk.FileChooserDialog(title="Save acquired data as...",action=gtk.FILE_CHOOSER_ACTION_SAVE, buttons=(gtk.STOCK_CANCEL,gtk.RESPONSE_CANCEL,gtk.STOCK_OPEN,gtk.RESPONSE_OK))
 		chooser.run()
-		self.pk2.write_data(chooser.get_filename())
+		self.pk2.write_la_data(chooser.get_filename())
 		chooser.destroy()
 
 	### Place or clear a cursor when a mouse button is clicked on the drawing area
@@ -916,7 +1221,7 @@ class pk2_la_drawbox(gtk.DrawingArea):
 		self.gc.set_foreground(cmap.alloc_color("green"))
 
 		### Get the data source
-		data = pk2.get_data(self.source)
+		data = pk2.get_la_data(self.source)
 		last = "0"
 		xpos = 0
 			
@@ -982,10 +1287,10 @@ class pk2_io_button(gtk.Button):
 		self.set_io("Input")
 
 		### On the button press, update the state
-		self.connect('clicked', self.update_state)
+		self.connect('clicked', self.switch_state)
 	
 	### Switch between the current states
-	def update_state(self, widget):
+	def switch_state(self, widget):
 		### Set the label with the right colors and value
 		if self.get_label() == "0":
 			self.pk2.chan_val[self.channel] = 1
@@ -998,6 +1303,14 @@ class pk2_io_button(gtk.Button):
 			self.set_on(False)
 
 	def set_on(self, on):
+		### If we're in the input state, pass on == None to get the current value
+		if on == None:
+			if self.pk2.chan_val[self.channel] == 0:
+				on = False
+			else:
+				on = True
+
+		### Update the decorations
 		if on:
 			self.modify_bg(gtk.STATE_NORMAL, self.color_on)
 			self.modify_bg(gtk.STATE_INSENSITIVE, self.color_on)
@@ -1019,11 +1332,14 @@ class pk2_io_button(gtk.Button):
 		btn_lbl.modify_fg(gtk.STATE_SELECTED, self.txt_color)
 		btn_lbl.modify_fg(gtk.STATE_ACTIVE, self.txt_color)
 		btn_lbl.modify_fg(gtk.STATE_PRELIGHT, self.txt_color)
+
+		### Make sure we're queued to be updated
+		self.queue_draw()
 			
 	### Input or Output?
 	def set_io(self, io):
 		cmap = self.get_colormap()
-
+		
 		### Set the button to Input
 		if io == "Input":
 			### Set the button to inactive
@@ -1031,6 +1347,7 @@ class pk2_io_button(gtk.Button):
 			### Set the colors
 			self.color_on = cmap.alloc_color("blue")
 			self.color_off = cmap.alloc_color("blue4")
+
 		### Set the button to Output
 		else:
 			### Set the button to active
@@ -1043,6 +1360,10 @@ class pk2_io_button(gtk.Button):
 
 		### Set the default value
 		self.set_label("0")
+		
+		### Set the direction in the pk2 module
+		self.pk2.chan_io[self.channel] = io
+		self.pk2.chan_val[self.channel] = 0
 		
 		### Set the colors
 		self.set_on(False)
@@ -1142,9 +1463,12 @@ class pk2_io_gui:
 	def run_io_btn(self, widget):
 		### Enable the I/O component
 		if widget.get_label() == "Enable I/O":
-			widget.set_label("Disable I/O")
+			if self.pk2.run_io(self):
+				widget.set_label("Disable I/O")
 		else:
 			widget.set_label("Enable I/O")
+			self.pk2.io_running = False
+			self.pk2.io_thread.join()
 
 	def update_io(self, widget, chan):
 		index = widget.get_active()
@@ -1163,6 +1487,12 @@ class pk2_io_gui:
 			self.chan2.set_io(io)
 		elif chan == 3:
 			self.chan3.set_io(io)
+
+	### Update the buttons based on the I/O from the program
+	def update_btns(self):
+		self.chan1.set_on(None)
+		self.chan2.set_on(None)
+		self.chan3.set_on(None)
 
 	def get(self):
 		return self.frame
@@ -1232,6 +1562,9 @@ class pk2_la_gui:
 		self.window = window
 
 	def delete(self, widget, event=None):
+		if self.pk2.io_running:
+			self.pk2.io_running = False
+			self.pk2.io_thread.join()
 		gtk.main_quit()
 		return False
 
@@ -1239,7 +1572,7 @@ class pk2_la_gui:
 		pk2 = self.pk2
 	
 		### Check to be sure that we have a valid state
-		if not pk2.setup_valid():
+		if not pk2.la_setup_valid():
 			err = gtk.MessageDialog(None, gtk.DIALOG_MODAL, gtk.MESSAGE_ERROR, gtk.BUTTONS_OK, "You must set at least one trigger")
 			err.set_title("Invalid Configuration")
 			err.run()
@@ -1252,7 +1585,7 @@ class pk2_la_gui:
 		### Update the window (done here because the pk2.acquire might take a long time)
 		gtk.main_iteration(False)
 		### Run the analyzer
-		if not self.pk2.acquire_la():
+		if not self.pk2.la_acquire():
 			err = gtk.MessageDialog(None, gtk.DIALOG_MODAL, gtk.MESSAGE_ERROR, gtk.BUTTONS_OK, "The acquisition was canceled")
 			err.set_title("Canceled")
 			err.run()
@@ -1273,4 +1606,7 @@ if __name__ == "__main__":
 	try:
 		base.main()
 	except (KeyboardInterrupt):
+		if base.pk2.io_running:
+			base.pk2.io_running = False
+			base.pk2.io_thread.join()
 		sys.exit(-1)
