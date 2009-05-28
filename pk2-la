@@ -30,7 +30,6 @@ import gtk
 
 ### This makes threads work
 gtk.gdk.threads_init()
-gobject.threads_init()
 
 ###############################################################################
 ### Logic Analyzer
