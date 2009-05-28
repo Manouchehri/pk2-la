@@ -21,9 +21,9 @@ I/O Probe
 		0xF7: MCLR Ground On
 		0xF9: VPP PWM(?) On
 		0xF3: Set ICSP Pins
-		0xXX: ICSP Pin value
+		0xXX: ICSP Pin value (See below)
 		0xCF: Set AUX Pins
-		0xXX: AUX Pin value
+		0xXX: AUX Pin value (See below)
 		0xE8: Long Delay
 		0x14: Delay Amount
 
@@ -47,12 +47,13 @@ I/O Probe
 			0x8000 - Download Buffer Overflow
 	
 	ICSP Pins:
-		0x01: PGC I/O (?) - 1 if Input / 0 if Output
-		0x02: PGD I/O - 1 if Input / 0 if Output
-		0x04: PGC Value (Pin 5)
-		0x08: PGD Value (Pin 4)
+		0x01: Pin 5 - I/O - 1 if Input / 0 if Output
+		0x02: Pin 4 - I/O - 1 if Input / 0 if Output
+		0x04: Pin 5 - Output Value
+		0x08: Pin 6 - Output Value
 	AUX Pins:
-		0x01: Aux Pin Value / I/O (?)
+		0x01: Pin 6 - I/O - 1 if Input / 0 if Output
+		0x02: Pin 6 - Output Value
 
 5. Script 2 - Sets up the I/O Ports
 	Command:
@@ -75,4 +76,12 @@ I/O Probe
 			0xDC: ICSP States Buffer
 			0xCE: Aux State Buffer
 			0xAA: Upload Data Command (?)
+		Return value:
+			0x00: Unknown
+			0x01: ICSP Byte
+				0x01 - Pin 5 (set/unset)
+				0x02 - Pin 4 (set/unset)
+			0x02: AUX Byte
+				0x01 - Pin 6 (set/unset)
+
 	c. Read Status

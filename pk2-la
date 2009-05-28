@@ -40,6 +40,7 @@ PK2_SET_VPP		= 0xA1 # Logic Input Level
 PK2_SET_VDD		= 0xA0 # Supply Level
 
 ### Scripting Commands (from pk2cmd source, only the used ones are here)
+PK2_SCR_VPP_ON		= 0xFB
 PK2_SCR_VPP_OFF		= 0xFA
 PK2_SCR_VPP_PWM_ON	= 0xF9
 PK2_SCR_MCLR_GND_ON	= 0xF7
@@ -51,10 +52,10 @@ PK2_SCR_SET_AUX		= 0xCF
 PK2_SCR_AUX_BUF		= 0xCE
 
 ### Pin Constants for I/O
-PK2_IO_ICSP_1_IN	= 0x01
-PK2_IO_ICSP_2_IN	= 0x02
-PK2_IO_ICSP_1_SET	= 0x04
-PK2_IO_ICSP_2_SET	= 0x08
+PK2_IO_ICSP_1_IN	= 0x02
+PK2_IO_ICSP_1_SET	= 0x08
+PK2_IO_ICSP_2_IN	= 0x01
+PK2_IO_ICSP_2_SET	= 0x04
 PK2_IO_AUX_1_IN		= 0x01
 PK2_IO_AUX_1_SET	= 0x02
 
@@ -239,14 +240,15 @@ class pk2_la:
 		### Channel 1
 		if self.chan_io[1] == "Input":
 			icsp_pins = icsp_pins | PK2_IO_ICSP_1_IN
-		if self.chan_val[1] == 1:
+		elif self.chan_val[1] == 1:
 			icsp_pins = icsp_pins | PK2_IO_ICSP_1_SET
 		
 		### Channel 2
 		if self.chan_io[2] == "Input":
 			icsp_pins = icsp_pins | PK2_IO_ICSP_2_IN
-		if self.chan_val[2] == 1:
+		elif self.chan_val[2] == 1:
 			icsp_pins = icsp_pins | PK2_IO_ICSP_2_SET
+
 		return icsp_pins
 	
 	### Generate the byte used to set the AUX Pins
@@ -256,7 +258,7 @@ class pk2_la:
 		### Aux pin
 		if self.chan_io[3] == "Input":
 			aux_pins = aux_pins | PK2_IO_AUX_1_IN
-		if self.chan_val[3] == 1:
+		elif self.chan_val[3] == 1:
 			aux_pins = aux_pins | PK2_IO_AUX_1_SET
 		return aux_pins
 
@@ -265,12 +267,12 @@ class pk2_la:
 		msg = chr(PK2_RUN_SCRIPT)
 		### 9 Commands in this script
 		msg = msg + chr(0x09)
-		### Turn off VPP
-		msg = msg + chr(PK2_SCR_VPP_OFF)
 		### Set Ch. 0 to 0/1
 		if self.chan_val[0] == 0:
+			msg = msg + chr(PK2_SCR_VPP_OFF)
 			msg = msg + chr(PK2_SCR_MCLR_GND_ON)
 		else:
+			msg = msg + chr(PK2_SCR_VPP_ON)
 			msg = msg + chr(PK2_SCR_MCLR_GND_OFF)
 		### Turn on VPP PWM
 		msg = msg + chr(PK2_SCR_VPP_PWM_ON)
@@ -298,12 +300,12 @@ class pk2_la:
 		msg = chr(PK2_RUN_SCRIPT)
 		### 6 Commands in this script
 		msg = msg + chr (0x06)
-		### Turn off VPP
-		msg = msg + chr(PK2_SCR_VPP_OFF)
 		### Set Ch. 0 to 0/1
 		if self.chan_val[0] == 0:
+			msg = msg + chr(PK2_SCR_VPP_OFF)
 			msg = msg + chr(PK2_SCR_MCLR_GND_ON)
 		else:
+			msg = msg + chr(PK2_SCR_VPP_ON)
 			msg = msg + chr(PK2_SCR_MCLR_GND_OFF)
 		### Set ICSP Pins
 		msg = msg + chr(PK2_SCR_SET_ICSP_PINS) + chr(self.gen_icsp_byte())
@@ -358,17 +360,15 @@ class pk2_la:
 				pass
 			else:
 				done = True
-
-		### FIXME understand these
 		return ret
 		
 	### Run the I/O Module
 	def run_io(self):
 		### Check to make sure we have a voltage on the device
 		vdd, vpp = self.check_voltages()
-		### I'm not sure this is the correct check, but it should work
-		if vdd < vpp:
-			err = gtk.MessageDialog(None, gtk.DIALOG_MODAL, gtk.MESSAGE_ERROR, gtk.BUTTONS_OK, "You must connect VDD (pin 2) to a source")
+		### If the input voltage is < 2.5v, it won't work
+		if vdd < 2.5: 
+			err = gtk.MessageDialog(None, gtk.DIALOG_MODAL, gtk.MESSAGE_ERROR, gtk.BUTTONS_OK, "You must connect VDD (pin 2) to a source between 2.5v and 5.0v")
 			err.set_title("Check Source Voltage")
 			err.run()
 			err.destroy()
@@ -694,10 +694,12 @@ class io_thread(Thread):
 			ret = self.pk2.io_request_pins()
 
 			#print ret[0], ret[1], ret[2], ret[3]
-			self.pk2.chan_val[3] = ret[2] & 0x01
-
-			### FIXME figure out the return value
-			#print ret
+			if self.pk2.chan_io[1] == "Input":
+				self.pk2.chan_val[1] = ret[1] & 0x02
+			if self.pk2.chan_io[2] == "Input":
+				self.pk2.chan_val[2] = ret[1] & 0x01
+			if self.pk2.chan_io[3] == "Input":
+				self.pk2.chan_val[3] = ret[2] & 0x01
 
 			### Check device status
 			### FIXME What are we checking here?
@@ -1386,12 +1388,12 @@ class pk2_io_gui:
 		self.frame = frame
 
 		#####################################################
-		### Channel 0 
+		### Channel 0 / Pin 1
 		#####################################################
 		ch0 = gtk.HBox(False, 0)
 		frame.pack_start(ch0, True, False, 0)
 		### Label
-		ch0_lbl = gtk.Label("Channel 0: ")	
+		ch0_lbl = gtk.Label("Pin 1: ")	
 		ch0.pack_start(ch0_lbl, False, False, 0)
 		### I/O Selection
 		self.chan0_io = gtk.combo_box_new_text()
@@ -1405,12 +1407,12 @@ class pk2_io_gui:
 		ch0.pack_start(self.chan0, True, True, 0)
 		
 		#####################################################
-		### Channel 1 
+		### Channel 1 / Pin 2
 		#####################################################
 		ch1 = gtk.HBox(False, 0)
 		frame.pack_start(ch1, True, False, 0)
 		### Label
-		ch1_lbl = gtk.Label("Channel 1: ")	
+		ch1_lbl = gtk.Label("Pin 4: ")	
 		ch1.pack_start(ch1_lbl, False, False, 0)
 		### I/O Selection
 		self.chan1_io = gtk.combo_box_new_text()
@@ -1425,12 +1427,12 @@ class pk2_io_gui:
 		ch1.pack_start(self.chan1, True, True, 0)
 		
 		#####################################################
-		### Channel 2 
+		### Channel 2 / Pin 5
 		#####################################################
 		ch2 = gtk.HBox(False, 0)
 		frame.pack_start(ch2, True, False, 0)
 		### Label
-		ch2_lbl = gtk.Label("Channel 2: ")	
+		ch2_lbl = gtk.Label("Pin 5: ")
 		ch2.pack_start(ch2_lbl, False, False, 0)
 		### I/O Selection
 		self.chan2_io = gtk.combo_box_new_text()
@@ -1445,12 +1447,12 @@ class pk2_io_gui:
 		ch2.pack_start(self.chan2, True, True, 0)
 		
 		#####################################################
-		### Channel 3 
+		### Channel 3 / Pin 6
 		#####################################################
 		ch3 = gtk.HBox(False, 0)
 		frame.pack_start(ch3, True, False, 0)
 		### Label
-		ch3_lbl = gtk.Label("Channel 3: ")	
+		ch3_lbl = gtk.Label("Pin 6: ")	
 		ch3.pack_start(ch3_lbl, False, False, 0)
 		### I/O Selection
 		self.chan3_io = gtk.combo_box_new_text()
