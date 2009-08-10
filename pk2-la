@@ -149,7 +149,7 @@ class pk2_la:
 
 		### Make sure we have at least one!
 		if len(devices) < 1:
-			sys.stderr.write("No PicKit2 USB device Found!\n")
+			sys.stderr.write("No PicKit2 USB device found!\n")
 			sys.exit(-1)
 		else:
 			return devices[unit]
@@ -656,7 +656,7 @@ class pk2_la:
 		### Falling Edge
 		elif trigger == "\\":
 			self.trig_en = self.trig_en | trig_const
-			self.trig_1 = self.trig_1 | ~(trig_const)
+			self.trig_1 = self.trig_1 & ~(trig_const)
 			self.trig_edge = self.trig_edge | trig_const
 	
 	### Returns the selected channel data
