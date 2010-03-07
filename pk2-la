@@ -101,8 +101,18 @@ class pk2_la:
 		try:
 			dev.claimInterface(0)
 		except:
-			sys.stderr.write("Unable to claim the PicKit2 USB interface!\n")
-			sys.exit(-1)
+			### Try to detach any other devices using the USB interface
+			try:
+				dev.detachKernelDriver(0)
+			except:
+				sys.stderr.write("Unable to detach existing driver from the PicKit2 USB device!\n")
+				sys.exit(-1)
+			### Now that it's detached, try to claim again	
+			try:
+				dev.claimInterface(0)
+			except:
+				sys.stderr.write("Unable to claim the PicKit2 USB interface!\n")
+				sys.exit(-1)
 
 		###############################################################
 		### Logic Analyzer default values
