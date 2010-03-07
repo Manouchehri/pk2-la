@@ -1113,10 +1113,13 @@ class pk2_la_display:
 					diff = self.chan1.cursor1 - self.chan1.cursor2
 				else:
 					diff = self.chan1.cursor2 - self.chan1.cursor1
-					
-				khz = round((1.0 / diff) * 1000, 1)
-				self.la_cur_diff_label.set_text("Distance: %ius (%.1fkHz)" % (diff, khz))
-
+				
+				### Display "N/A" if there is 0 difference (prevent div by 0)
+				if diff == 0:
+					self.la_cur_diff_label.set_text("Distance: N/A")
+				else:
+					khz = round((1.0 / diff) * 1000, 1)
+					self.la_cur_diff_label.set_text("Distance: %ius (%.1fkHz)" % (diff, khz))
 
 		### Clear cursors
 		elif event.button == 3:
