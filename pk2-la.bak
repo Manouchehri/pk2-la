@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python2
 
 # Logic Analyzer and I/O Probe for the Microchip PICkit2 Programmer (v1.1)
 # Copyright (C) 2009, Joseph Jezak <josejx@gentoo.org>
@@ -481,7 +481,7 @@ class pk2_la:
 	def la_setup_trigger(self):
 		### Quick check, make sure things are sane
 		if not self.la_setup_valid():
-			print("The setup is not valid - please set a trigger")
+			print "The setup is not valid - please set a trigger"
 			return False
 			
 		### Create the setup packet to send to the device
@@ -508,10 +508,10 @@ class pk2_la:
 
 		### User pressed cancel
 		if ret[0] == 0x04 and ret[1] == 0x40:
-			print("The user pressed cancel")
+			print "The user pressed cancel"
 			return False
 		
-		print("Trigger Hit: Aquiring Data")
+		print "Trigger Hit: Aquiring Data"
 		return True
 
 	### Read bank from trigger data
@@ -680,7 +680,7 @@ class pk2_la:
 
 		### Write out the data
 		for i in range(1,4):
-			df.write("Channel: " + repr(i) + "\n")
+			df.write("Channel: " + `i` + "\n")
 			for bit in self.channel_data[i - 1]:
 				df.write(bit)
 			df.write("\n\n")
@@ -931,7 +931,7 @@ class pk2_rxFrame:
 			self.note_label.set_text("Signals > 2.5kHz will alias")
 			pk2.set_rate("5kHz");	
 		### Set the value per tick message
-		self.parent.la_display.la_ticks_label.set_text(repr(pk2.us_per_tick) + "us/tick")
+		self.parent.la_display.la_ticks_label.set_text(`pk2.us_per_tick` + "us/tick")
 		### Disable cursors on all of the boxes	
 		self.parent.la_display.clear_cursors()
 		### Force a redraw
@@ -960,7 +960,7 @@ class pk2_la_display:
 		frame.pack_start(infobox, True, False, 0)
 
 		### Add the legend text
-		self.la_ticks_label = gtk.Label(repr(pk2.us_per_tick) + "us/tick")
+		self.la_ticks_label = gtk.Label(`pk2.us_per_tick` + "us/tick")
 		self.la_ticks_label.set_property("attributes", italic)
 		infobox.pack_start(self.la_ticks_label, True, False, 0)
 
@@ -1094,7 +1094,7 @@ class pk2_la_display:
 
 				### Update the location label
 				loc = pk2.us_per_tick * self.chan1.cursor1
-				self.la_cur1_label.set_text("Cursor 1: " + repr(loc) + "us")
+				self.la_cur1_label.set_text("Cursor 1: " + `loc` + "us")
 
 			else:
 				### Assign the cursor location to all of the boxes
@@ -1104,7 +1104,7 @@ class pk2_la_display:
 
 				### Update the location label
 				loc = pk2.us_per_tick * self.chan1.cursor2
-				self.la_cur2_label.set_text("Cursor 2: " + repr(loc) + "us")
+				self.la_cur2_label.set_text("Cursor 2: " + `loc` + "us")
 
 			### If we have both cursors, update the distance label too
 			if self.chan1.cur1_en == True and self.chan1.cur2_en == True:
